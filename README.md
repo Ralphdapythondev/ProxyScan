@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `ProxyMaster-Lite` class is designed to scan, verify, and manage a list of proxies. It uses GeoIP databases to gather information about the proxies and stores the results in an SQLite database. The scanner can be run manually or scheduled to run at regular intervals.
+The `ImprovedProxyScanner` class is designed to scan, verify, and manage a list of proxies. It uses GeoIP databases to gather information about the proxies and stores the results in an SQLite database. The scanner can be run manually or scheduled to run at regular intervals.
 
 ## Table of Contents
 - [Classes and Enums](#classes-and-enums)
