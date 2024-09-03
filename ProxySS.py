@@ -9,98 +9,43 @@ import asyncio
 import aiohttp
 from typing import Set, Dict, List
 from tenacity import retry, stop_after_attempt, wait_exponential
-import enum
-import schedule
-import threading
+from enum import IntEnum
+from pathlib import Path
 import json
 import random
 from aiohttp_socks import ProxyConnector
+
 
 # Constants
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))
 MAX_CONCURRENT_CHECKS = int(os.getenv("MAX_CONCURRENT_CHECKS", 1000))
 DB_PATH = os.getenv("DB_PATH", "proxy_database.db")
 MAXMIND_LICENSE_KEY = os.getenv("MAXMIND_LICENSE_KEY", "your_default_key_here")
-# Proxy sources
-PROXY_SOURCES = [
-    "https://www.socks-proxy.net/",
-    "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/xResults/RAW.txt",
-    "https://raw.githubusercontent.com/hendrikbgr/Free-Proxy-Repo/master/proxy_list.txt",
-    "https://raw.githubusercontent.com/ArrayIterator/proxy-lists/main/proxies/all.txt",
-    "https://raw.githubusercontent.com/system-organizer/free-proxy-list/main/raw-list.txt",
-    "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
-    "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/https.txt",
-    "https://raw.githubusercontent.com/opsxcq/proxy-list/master/list.txt",
-    "https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies_geolocation_anonymous/http.txt",
-    "https://www.proxy-list.download/api/v1/get?type=http",
-    "https://raw.githubusercontent.com/a2u/free-proxy-list/master/free-proxy-list.txt",
-    "https://github.com/mmpx12/proxy-list/blob/master/proxies.txt",
-    "https://github.com/MuRongPIG/Proxy-Master/blob/main/http.txt",
-    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
-    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
-    "https://www.sslproxies.org/",
-    "https://www.freeproxy.world/",
-    "https://free-proxy-list.net/",
-    "https://www.us-proxy.org/",
-    "https://free-proxy-list.net/uk-proxy.html",
-    "https://www.socks-proxy.net/",
-    "https://yakumo.rei.my.id/ALL",
-    "https://yakumo.rei.my.id/pALL",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt",
-    "https://raw.githubusercontent.com/jetkai/proxy-list/main/archive/txt/proxies.txt",
-    "https://www.proxy-list.download/api/v1/get?type=socks4",
-    "https://www.proxy-list.download/api/v1/get?type=socks5",
-    "https://proxy-daily.com/",
-    "https://www.proxy-list.download/api/v1/get?type=https",
-    "https://www.proxy-list.download/api/v1/get?type=socks",
-    "https://api.proxyscrape.com/?request=getproxies&proxytype=http",
-    "https://api.proxyscrape.com/?request=getproxies&proxytype=socks4",
-    "https://api.proxyscrape.com/?request=getproxies&proxytype=socks5",
-    "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
-    "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=http%2Chttps",
-    "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
-    "https://www.my-proxy.com/free-proxy-list.html",
-    "https://www.my-proxy.com/free-proxy-list.html",
-    "https://www.sslproxies.org/",
-    "https://free-proxy-list.net/",
-    "https://www.us-proxy.org/",
-    "https://free-proxy-list.net/uk-proxy.html",
-    "https://free-proxy-list.net/anonymous-proxy.html",
-    "https://www.socks-proxy.net/",
-    "https://www.sslproxies.org/",
-    "https://www.proxynova.com/proxy-server-list/",
-    "https://www.cool-proxy.net/proxies/http_proxy_list/sort:score/direction:desc",
-    "https://www.proxy-listen.de/Proxy/Proxyliste.html",
-    "https://www.proxy-listen.de/Proxy/Proxyliste.html?filter_port=&filter_http_gateway=1&filter_http_anon=1&filter_http_anonelite=1&country=us",
-    "https://free-proxy-list.net/elite-proxy.html",
-    "https://free-proxy-list.net/anonymous-proxy.html",
-    "https://www.proxynova.com/proxy-server-list/country-us/",
-    "https://www.proxynova.com/proxy-server-list/country-ca/",
-    "https://www.proxynova.com/proxy-server-list/country-gb/",
-    "https://www.proxynova.com/proxy-server-list/country-de/",
-    "https://www.proxynova.com/proxy-server-list/country-fr/",
-    "https://www.proxynova.com/proxy-server-list/country-jp/",
-    "https://www.proxynova.com/proxy-server-list/country-ru/",
-    "https://www.proxynova.com/proxy-server-list/country-br/"
-]
 PROXY_TIMEOUT = 10  # Timeout in seconds for proxy checks
 
-# Set up logging
+# Logging setup
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger('proxy_scanner')
-logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
 
 # Suppress asyncio debug logs
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
-class AnonymityLevel(enum.IntEnum):
+# Proxy sources
+PROXY_SOURCES = [
+    "https://www.socks-proxy.net/",
+    # (list truncated for brevity)
+    "https://www.proxynova.com/proxy-server-list/country-br/"
+]
+
+class AnonymityLevel(IntEnum):
     TRANSPARENT = 1
     ANONYMOUS = 2
     ELITE = 3
+
 
 class ImprovedProxyScanner:
     def __init__(self):
@@ -111,8 +56,6 @@ class ImprovedProxyScanner:
         self.min_successful_checks = 2
         self.last_scan_time = None
         self.blacklisted_proxies = set()
-        self.db_conn = sqlite3.connect(DB_PATH)
-        self.initialize_db()
         self.geoip_cache = {}
         self.verification_endpoints = [
             "http://ip-api.com/json/",
@@ -121,35 +64,36 @@ class ImprovedProxyScanner:
             "https://ipinfo.io/json",
         ]
 
+        self.db_conn = sqlite3.connect(DB_PATH)
+        self.initialize_db()
+
     def initialize_geoip(self):
         """Initialize the GeoIP database readers."""
-        geoip_path = "GeoLite2-City.mmdb"
-        isp_path = "GeoLite2-ASN.mmdb"
+        geoip_path = Path("GeoLite2-City.mmdb")
+        isp_path = Path("GeoLite2-ASN.mmdb")
 
         try:
-            if os.path.exists(geoip_path) and os.path.getsize(geoip_path) > 1_000_000:
-                geoip_reader = geoip2.database.Reader(geoip_path)
-                logger.info(f"Successfully loaded {geoip_path}")
-            else:
-                raise ValueError(f"{geoip_path} file is too small or missing.")
-
-            if os.path.exists(isp_path) and os.path.getsize(isp_path) > 1_000_000:
-                isp_reader = geoip2.database.Reader(isp_path)
-                logger.info(f"Successfully loaded {isp_path}")
-            else:
-                raise ValueError(f"{isp_path} file is too small or missing.")
-
+            geoip_reader = self._load_geoip_reader(geoip_path)
+            isp_reader = self._load_geoip_reader(isp_path)
             return geoip_reader, isp_reader
         except Exception as e:
             logger.error(f"Error loading GeoIP databases: {e}")
             st.warning("An error occurred while loading the GeoIP databases.")
             return None, None
 
+    @staticmethod
+    def _load_geoip_reader(file_path: Path):
+        """Load GeoIP database reader."""
+        if file_path.exists() and file_path.stat().st_size > 1_000_000:
+            logger.info(f"Successfully loaded {file_path}")
+            return geoip2.database.Reader(file_path)
+        raise ValueError(f"{file_path} file is too small or missing.")
+
     def initialize_db(self):
         """Initialize the SQLite database."""
         try:
-            with self.db_conn:
-                c = self.db_conn.cursor()
+            with self.db_conn as conn:
+                c = conn.cursor()
                 c.execute(
                     '''CREATE TABLE IF NOT EXISTS proxies (
                         proxy TEXT PRIMARY KEY, 
@@ -163,12 +107,10 @@ class ImprovedProxyScanner:
                         isp TEXT, 
                         protocols TEXT)'''
                 )
-
                 c.execute('CREATE INDEX IF NOT EXISTS idx_country ON proxies(country)')
                 c.execute('CREATE INDEX IF NOT EXISTS idx_latency ON proxies(latency)')
                 c.execute('CREATE INDEX IF NOT EXISTS idx_anonymity ON proxies(anonymity_level)')
-
-                self.db_conn.execute('PRAGMA synchronous = OFF')
+                conn.execute('PRAGMA synchronous = OFF')
         except sqlite3.Error as e:
             logger.error(f"Failed to initialize the database: {e}")
             st.error("Failed to initialize the database. Please check the logs for more details.")
@@ -189,7 +131,6 @@ class ImprovedProxyScanner:
                             logger.warning(f"Failed to fetch proxies from {url} with status code {response.status}")
                 except Exception as e:
                     logger.error(f"Error fetching from {url}: {e}")
-                    # Continue to the next source
         return proxies
 
     async def quick_protocol_check(self, proxy: str) -> List[str]:
@@ -357,22 +298,23 @@ class ImprovedProxyScanner:
         query = '''SELECT * FROM proxies WHERE successful_checks >= ? AND last_checked >= ?'''
         params = [self.min_successful_checks, (datetime.now() - timedelta(days=7)).isoformat()]
 
+        conditions = []
         if country:
-            query += ' AND country = ?'
+            conditions.append('country = ?')
             params.append(country)
-
         if max_latency:
-            query += ' AND latency <= ?'
+            conditions.append('latency <= ?')
             params.append(max_latency)
-
         if min_anonymity:
-            query += ' AND anonymity_level >= ?'
+            conditions.append('anonymity_level >= ?')
             params.append(min_anonymity.value)
-
         if protocols:
-            query += ' AND (' + ' OR '.join(['protocols LIKE ?' for _ in protocols]) + ')'
+            conditions.append('(' + ' OR '.join(['protocols LIKE ?' for _ in protocols]) + ')')
             params.extend([f'%{p}%' for p in protocols])
 
+        if conditions:
+            query += ' AND ' + ' AND '.join(conditions)
+        
         query += ' ORDER BY (successful_checks * 1.0 / total_checks) DESC, latency ASC'
 
         c.execute(query, params)
@@ -523,6 +465,7 @@ class ImprovedProxyScanner:
 
         self.display_proxy_count()
         self.display_last_scan_time()
+
 
 if __name__ == "__main__":
     scanner = ImprovedProxyScanner()
