@@ -1,6 +1,5 @@
 aiohttp
 geoip2
-sqlite3
 requests
 tenacity
 aiohttp-socks
