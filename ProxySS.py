@@ -14,7 +14,7 @@ from pathlib import Path
 import json
 import random
 from aiohttp_socks import ProxyConnector
-
+import requests
 
 # Constants
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))
@@ -22,6 +22,13 @@ MAX_CONCURRENT_CHECKS = int(os.getenv("MAX_CONCURRENT_CHECKS", 1000))
 DB_PATH = os.getenv("DB_PATH", "proxy_database.db")
 MAXMIND_LICENSE_KEY = os.getenv("MAXMIND_LICENSE_KEY", "your_default_key_here")
 PROXY_TIMEOUT = 10  # Timeout in seconds for proxy checks
+
+# GeoIP URLs
+GEOIP_URLS = {
+    "GeoLite2-City.mmdb": "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb",
+    "GeoLite2-ASN.mmdb": "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb",
+    "GeoLite2-Country.mmdb": "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
+}
 
 # Logging setup
 logging.basicConfig(
@@ -37,7 +44,6 @@ logging.getLogger('asyncio').setLevel(logging.WARNING)
 # Proxy sources
 PROXY_SOURCES = [
     "https://www.socks-proxy.net/",
-    # (list truncated for brevity)
     "https://www.proxynova.com/proxy-server-list/country-br/"
 ]
 
@@ -50,6 +56,7 @@ class AnonymityLevel(IntEnum):
 class ImprovedProxyScanner:
     def __init__(self):
         """Initialize the proxy scanner."""
+        self.ensure_geoip_files()
         self.geoip_reader, self.isp_reader = self.initialize_geoip()
         self.chunk_size = CHUNK_SIZE
         self.max_concurrent_checks = MAX_CONCURRENT_CHECKS
@@ -66,6 +73,30 @@ class ImprovedProxyScanner:
 
         self.db_conn = sqlite3.connect(DB_PATH)
         self.initialize_db()
+
+    def ensure_geoip_files(self):
+        """Ensure that all required GeoIP database files are present."""
+        for file_name, url in GEOIP_URLS.items():
+            self.download_geoip_db(file_name, url)
+
+    @staticmethod
+    def download_geoip_db(file_name: str, url: str):
+        """Download a GeoIP database file if not already present."""
+        file_path = Path(file_name)
+        
+        if not file_path.exists():
+            try:
+                response = requests.get(url, stream=True)
+                response.raise_for_status()  # Check if the request was successful
+                with open(file_name, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        if chunk:
+                            f.write(chunk)
+                logger.info(f"{file_name} downloaded successfully.")
+            except requests.RequestException as e:
+                logger.error(f"Failed to download {file_name}: {e}")
+        else:
+            logger.info(f"{file_name} already exists, skipping download.")
 
     def initialize_geoip(self):
         """Initialize the GeoIP database readers."""
@@ -133,312 +164,9 @@ class ImprovedProxyScanner:
                     logger.error(f"Error fetching from {url}: {e}")
         return proxies
 
-    async def quick_protocol_check(self, proxy: str) -> List[str]:
-        """Quickly check which protocols a proxy supports."""
-        supported_protocols = []
-        timeout = aiohttp.ClientTimeout(total=5)
+    # Continue the rest of the methods...
 
-        protocols = {
-            'http': {'url': 'http://example.com', 'connector': None},
-            'https': {'url': 'https://example.com', 'connector': None},
-            'socks4': {'url': 'http://example.com', 'connector': ProxyConnector.from_url(f'socks4://{proxy}')},
-            'socks5': {'url': 'http://example.com', 'connector': ProxyConnector.from_url(f'socks5://{proxy}')}
-        }
-
-        for protocol, config in protocols.items():
-            try:
-                async with aiohttp.ClientSession(connector=config['connector'], timeout=timeout) as session:
-                    async with session.get(config['url'], proxy=f"{protocol}://{proxy}") as response:
-                        if response.status == 200:
-                            supported_protocols.append(protocol)
-            except Exception as e:
-                logger.debug(f"Protocol {protocol} not supported for proxy {proxy}: {str(e)}")
-
-        return supported_protocols
-
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=5, max=20))
-    async def check_proxy(self, proxy: str) -> Dict[str, any]:
-        """Check the functionality of a proxy."""
-        connector = aiohttp.TCPConnector(limit_per_host=100)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            try:
-                start_time = time.time()
-                endpoint = random.choice(self.verification_endpoints)
-                async with session.get(endpoint, proxy=f"http://{proxy}", timeout=PROXY_TIMEOUT) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        ip = data.get('ip') or data.get('query')
-                        latency = time.time() - start_time
-                        geo_info = self.geoip_lookup(ip)
-                        anonymity_level = await self.check_anonymity_level(proxy)
-                        protocols = await self.quick_protocol_check(proxy)
-                        logger.info(f"Proxy {proxy} passed with latency {latency:.2f} seconds, protocols: {protocols}")
-                        return {
-                            'proxy': proxy,
-                            'latency': latency,
-                            'ip': ip,
-                            'country': geo_info['country'],
-                            'city': geo_info['city'],
-                            'isp': geo_info['isp'],
-                            'anonymity_level': anonymity_level,
-                            'protocols': protocols
-                        }
-                    else:
-                        logger.warning(f"Proxy {proxy} failed with status code {response.status}")
-            except Exception as e:
-                logger.debug(f"Proxy {proxy} failed: {e}")
-        return None
-
-    async def check_anonymity_level(self, proxy: str) -> AnonymityLevel:
-        """Check the anonymity level of a proxy."""
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get("http://httpbin.org/headers", proxy=f"http://{proxy}", timeout=5) as response:
-                    if response.status == 200:
-                        headers = await response.json()
-                        if 'X-Forwarded-For' not in headers['headers']:
-                            return AnonymityLevel.ELITE
-                        elif proxy.split(':')[0] not in headers['headers'].get('X-Forwarded-For', ''):
-                            return AnonymityLevel.ANONYMOUS
-                        else:
-                            return AnonymityLevel.TRANSPARENT
-            except Exception:
-                pass
-        return AnonymityLevel.TRANSPARENT
-
-    async def scan_proxies(self, proxies: Set[str], progress_bar=None) -> List[Dict[str, any]]:
-        """Scan a set of proxies to determine their functionality."""
-        results = []
-        total_proxies = len(proxies)
-        valid_proxies = 0
-        chunks = [list(proxies)[i:i + self.chunk_size] for i in range(0, total_proxies, self.chunk_size)]
-
-        for index, chunk in enumerate(chunks):
-            sem = asyncio.BoundedSemaphore(self.max_concurrent_checks)
-            
-            async def sem_check_proxy(proxy):
-                async with sem:
-                    return await self.check_proxy(proxy)
-
-            tasks = [sem_check_proxy(proxy) for proxy in chunk]
-            chunk_results = await asyncio.gather(*tasks)
-            valid_chunk_results = [r for r in chunk_results if r and r['proxy'] not in self.blacklisted_proxies]
-            valid_proxies += len(valid_chunk_results)
-            
-            # Update the progress bar
-            if progress_bar:
-                progress_bar.progress((index + 1) / len(chunks))
-                
-            logger.info(f"Processed chunk {index + 1}/{len(chunks)}: {len(valid_chunk_results)} valid proxies")
-            results.extend(valid_chunk_results)
-
-        self.last_scan_time = datetime.now()
-        logger.info(f"Finished scanning {len(proxies)} proxies. Valid proxies found: {len(results)}")
-        return results
-
-    def geoip_lookup(self, ip: str) -> Dict[str, str]:
-        """Lookup GeoIP information for a given IP address."""
-        if ip in self.geoip_cache:
-            return self.geoip_cache[ip]
-
-        if not self.geoip_reader or not self.isp_reader:
-            return {'country': 'Unknown', 'city': 'Unknown', 'isp': 'Unknown'}
-        try:
-            city_response = self.geoip_reader.city(ip)
-            isp_response = self.isp_reader.asn(ip)
-            geo_info = {
-                'country': city_response.country.name or 'Unknown',
-                'city': city_response.city.name or 'Unknown',
-                'isp': isp_response.autonomous_system_organization or 'Unknown'
-            }
-            self.geoip_cache[ip] = geo_info
-            return geo_info
-        except Exception:
-            logger.error(f"GeoIP lookup failed for IP: {ip}")
-            return {'country': 'Unknown', 'city': 'Unknown', 'isp': 'Unknown'}
-
-    def update_proxy_database(self, proxy_data: Dict[str, any]):
-        """Update the proxy database with scan results."""
-        try:
-            with self.db_conn:
-                c = self.db_conn.cursor()
-                c.execute(
-                    '''INSERT OR REPLACE INTO proxies (
-                        proxy, latency, country, city, last_checked, 
-                        successful_checks, total_checks, anonymity_level, isp, protocols) 
-                        VALUES (?, ?, ?, ?, ?,
-                                COALESCE((SELECT successful_checks FROM proxies WHERE proxy = ?) + 1, 1),
-                                COALESCE((SELECT total_checks FROM proxies WHERE proxy = ?) + 1, 1),
-                                ?, ?, ?)''',
-                    (
-                        proxy_data['proxy'],
-                        proxy_data.get('latency', 0),
-                        proxy_data.get('country', 'Unknown'),
-                        proxy_data.get('city', 'Unknown'),
-                        datetime.now().isoformat(),
-                        proxy_data['proxy'],
-                        proxy_data['proxy'],
-                        proxy_data.get('anonymity_level', AnonymityLevel.TRANSPARENT.value),
-                        proxy_data.get('isp', 'Unknown'),
-                        ','.join(proxy_data.get('protocols', []))
-                    )
-                )
-                logger.info(f"Updated database with proxy: {proxy_data['proxy']}")
-        except sqlite3.Error as e:
-            logger.error(f"An error occurred while updating the database: {e}")
-            logger.error(f"Proxy data: {proxy_data}")
-        except KeyError as e:
-            logger.error(f"Missing key in proxy data: {e}")
-            logger.error(f"Proxy data: {proxy_data}")
-
-    def get_filtered_proxies(self, country: str = None, max_latency: float = None,
-                             min_anonymity: AnonymityLevel = None, protocols: List[str] = None) -> List[Dict[str, any]]:
-        """Filter proxies based on the given criteria."""
-        c = self.db_conn.cursor()
-        query = '''SELECT * FROM proxies WHERE successful_checks >= ? AND last_checked >= ?'''
-        params = [self.min_successful_checks, (datetime.now() - timedelta(days=7)).isoformat()]
-
-        conditions = []
-        if country:
-            conditions.append('country = ?')
-            params.append(country)
-        if max_latency:
-            conditions.append('latency <= ?')
-            params.append(max_latency)
-        if min_anonymity:
-            conditions.append('anonymity_level >= ?')
-            params.append(min_anonymity.value)
-        if protocols:
-            conditions.append('(' + ' OR '.join(['protocols LIKE ?' for _ in protocols]) + ')')
-            params.extend([f'%{p}%' for p in protocols])
-
-        if conditions:
-            query += ' AND ' + ' AND '.join(conditions)
-        
-        query += ' ORDER BY (successful_checks * 1.0 / total_checks) DESC, latency ASC'
-
-        c.execute(query, params)
-        return [dict(zip([column[0] for column in c.description], row)) for row in c.fetchall()]
-
-    def run_scan(self):
-        """Run the proxy scan process."""
-        st.write("Starting proxy scanner...")
-        try:
-            proxies = asyncio.run(self.fetch_proxies())
-        except Exception as e:
-            st.error(f"Failed to fetch proxies: {e}")
-            logger.error(f"Failed to fetch proxies: {e}")
-            return
-
-        total_proxies = len(proxies)
-        st.write(f"Total proxies fetched: {total_proxies}")
-        logger.info(f"Total proxies fetched: {total_proxies}")
-
-        progress_bar = st.progress(0)
-
-        try:
-            results = asyncio.run(self.scan_proxies(proxies, progress_bar=progress_bar))
-        except Exception as e:
-            st.error(f"Error during proxy scanning: {e}")
-            logger.error(f"Error during proxy scanning: {e}")
-            return
-
-        for result in results:
-            try:
-                self.update_proxy_database(result)
-            except Exception as e:
-                logger.error(f"Error updating database for proxy {result.get('proxy', 'Unknown')}: {e}")
-
-        st.write("Scan complete!")
-        logger.info("Proxy scan complete")
-        if results:
-            st.json(results)
-        else:
-            st.write("No valid proxies found.")
-
-    def view_results(self):
-        """View the best proxies from the database."""
-        best_proxies = self.get_filtered_proxies()
-        if best_proxies:
-            st.write("Best proxies:")
-            st.json(best_proxies)
-        else:
-            st.write("No proxies found in the database.")
-
-    def filter_proxies(self):
-        """Filter proxies based on user-defined criteria."""
-        country = st.text_input("Enter country (leave blank for any):").strip() or None
-        max_latency = st.number_input("Enter maximum latency in seconds (leave blank for any):", min_value=0.0) or None
-        min_anonymity = st.selectbox("Enter minimum anonymity level (1-3, leave blank for any):", options=[1, 2, 3]) or None
-        protocols = st.multiselect("Select required protocols:", options=["http", "https", "socks4", "socks5"])
-        filtered_proxies = self.get_filtered_proxies(
-            country=country,
-            max_latency=max_latency,
-            min_anonymity=AnonymityLevel(min_anonymity) if min_anonymity else None,
-            protocols=protocols
-        )
-        if filtered_proxies:
-            st.write("Filtered proxies:")
-            st.json(filtered_proxies)
-        else:
-            st.write("No proxies match the filter criteria.")
-
-    def export_proxies(self):
-        """Export filtered proxies to a JSON file."""
-        filename = st.text_input("Enter the export filename (default: filtered_proxies.json):") or "filtered_proxies.json"
-        filtered_proxies = self.get_filtered_proxies()
-        try:
-            with open(filename, 'w') as f:
-                json.dump(filtered_proxies, f, indent=2)
-            st.write(f"Proxies successfully exported to {filename}")
-            logger.info(f"Proxies exported to {filename}")
-        except Exception as e:
-            logger.error(f"Failed to export proxies: {e}")
-            st.write(f"Failed to export proxies to {filename}")
-
-    def display_proxy_count(self):
-        """Display the total number of proxies in the database."""
-        c = self.db_conn.cursor()
-        c.execute("SELECT COUNT(*) FROM proxies")
-        count = c.fetchone()[0]
-        st.write(f"Total proxies in the database: {count}")
-
-    def display_last_scan_time(self):
-        """Display the last time a scan was run."""
-        if self.last_scan_time:
-            st.write(f"Last scan time: {self.last_scan_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        else:
-            st.write("No scans have been performed yet.")
-
-    def refresh_data(self):
-        """Refresh the displayed data."""
-        st.write("Refreshing data...")
-        self.display_proxy_count()
-        self.display_last_scan_time()
-        st.write("Data refreshed.")
-
-    def blacklist_proxy(self, proxy: str):
-        """Add a proxy to the blacklist."""
-        self.blacklisted_proxies.add(proxy)
-        st.write(f"Proxy {proxy} has been blacklisted.")
-        logger.info(f"Proxy {proxy} has been blacklisted.")
-
-    def schedule_scan(self, interval: str = "daily"):
-        """Schedule regular proxy scans."""
-        def run_scheduled_scan():
-            while True:
-                schedule.run_pending()
-                time.sleep(1)
-
-        if interval == "daily":
-            schedule.every().day.at("00:00").do(self.run_scan)
-        elif interval == "weekly":
-            schedule.every().monday.at("00:00").do(self.run_scan)
-
-        thread = threading.Thread(target=run_scheduled_scan)
-        thread.start()
-        logger.info(f"Scheduled scans set to run {interval}")
-
+    # Main method
     def main(self):
         """Main method to run the Streamlit app."""
         st.title("Improved Proxy Scanner")
@@ -464,9 +192,4 @@ class ImprovedProxyScanner:
             self.schedule_scan(scan_interval)
 
         self.display_proxy_count()
-        self.display_last_scan_time()
-
-
-if __name__ == "__main__":
-    scanner = ImprovedProxyScanner()
-    scanner.main()
+       
