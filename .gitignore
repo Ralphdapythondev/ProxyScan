@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.db
+.env
+GeoLite2-City.mmdb
+GeoLite2-ASN.mmdb
